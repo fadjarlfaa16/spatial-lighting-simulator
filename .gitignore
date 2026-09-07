@@ -1,0 +1,75 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode — user-specific state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# Xcode — generated build and diagnostic products
+DerivedData/
+build/
+Build/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.xcresult
+*.trace
+
+# Swift Package Manager and local dependency caches
+.build/
+.swiftpm/
+Carthage/Build/
+Pods/
+vendor/bundle/
+
+# Core ML packages, compiled models, and source checkpoints
+# Models remain available locally and are copied into the app by Xcode, but are
+# intentionally excluded from Git/GitHub because the Sapiens assets are very large.
+lighting-simulator-app/Resources/Models/
+*.mlpackage/
+*.mlmodelc/
+*.mlarchive
+*.mlmodel
+*.onnx
+*.safetensors
+*.pt
+*.pth
+
+# Local conversion outputs and caches
+Tools/**/output/
+Tools/**/outputs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Coverage, temporary files, and logs
+*.profraw
+*.profdata
+*.log
+*.tmp
+*.swp
+*~
+
+# Local secrets and signing material
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
+*.provisionprofile
+
+# fastlane generated artifacts
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
