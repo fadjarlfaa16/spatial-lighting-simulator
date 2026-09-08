@@ -133,6 +133,7 @@ struct EditorView: View {
                     Divider()
                     editorSlider("Ambient", value: presenter.entity.parameters.ambientIntensity, range: 0...1.5, unit: "", presenter.ambient)
                     editorSlider("Diffuse", value: presenter.entity.parameters.diffuseStrength, range: 0...2, unit: "", presenter.diffuse)
+                    editorSlider("Haze", value: presenter.entity.parameters.hazeIntensity, range: 0...1, unit: "", presenter.haze)
                     DisclosureGroup("Advanced material") {
                         VStack {
                             editorSlider("Specular", value: presenter.entity.parameters.specularStrength, range: 0...0.5, unit: "", presenter.specular)

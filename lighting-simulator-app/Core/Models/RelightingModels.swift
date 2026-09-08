@@ -20,10 +20,11 @@ nonisolated struct RelightingParameters: Sendable, Equatable {
     var diffuseStrength: Float
     var specularStrength: Float
     var specularShininess: Float
+    var hazeIntensity: Float
 
     static let empty = RelightingParameters(
         lights: [], ambientIntensity: 0.58, diffuseStrength: 0.52,
-        specularStrength: 0.02, specularShininess: 64
+        specularStrength: 0.02, specularShininess: 64, hazeIntensity: 0.15
     )
 }
 
@@ -85,7 +86,8 @@ nonisolated enum SpatialToImageLightingMapper {
             ambientIntensity: 0.58,
             diffuseStrength: 0.52,
             specularStrength: 0.02,
-            specularShininess: 64
+            specularShininess: 64,
+            hazeIntensity: 0.15
         )
     }
 

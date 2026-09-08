@@ -249,6 +249,7 @@ private struct GPULight {
     var placement = SIMD4<Float>.zero
     var colorPower = SIMD4<Float>.zero
     var feather = SIMD4<Float>.zero
+    var beam = SIMD4<Float>.zero
 
     init(_ light: RelightLight? = nil) {
         guard let light else { return }
@@ -270,6 +271,12 @@ private struct GPULight {
             finite(light.direction.y, fallback: 0, range: -1...1),
             finite(light.direction.z, fallback: 1, range: -1...1)
         )
+        beam = SIMD4(
+            finite(light.normalizedSourcePosition.x, fallback: 0.5, range: -2...3),
+            finite(light.normalizedSourcePosition.y, fallback: 0.5, range: -2...3),
+            0,
+            0
+        )
     }
 }
 
@@ -287,7 +294,7 @@ private struct GPUUniforms {
             finite(p.specularStrength, fallback: 0, range: 0...100),
             finite(p.specularShininess, fallback: 64, range: 1...1024)
         )
-        scene = SIMD4(aspect, Float(min(p.lights.count, 3)), hasMask ? 1 : 0, 0)
+        scene = SIMD4(aspect, Float(min(p.lights.count, 3)), hasMask ? 1 : 0, finite(p.hazeIntensity, fallback: 0.15, range: 0...1))
         light0 = GPULight(p.lights.first)
         light1 = GPULight(p.lights.count > 1 ? p.lights[1] : nil)
         light2 = GPULight(p.lights.count > 2 ? p.lights[2] : nil)

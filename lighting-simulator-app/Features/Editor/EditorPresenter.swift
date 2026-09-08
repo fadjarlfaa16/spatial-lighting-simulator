@@ -33,6 +33,7 @@ final class EditorPresenter: ObservableObject {
     func diffuse(_ value: Float) { interactor.updateDiffuse(value) }
     func specular(_ value: Float) { interactor.updateSpecular(value) }
     func shininess(_ value: Float) { interactor.updateShininess(value) }
+    func haze(_ value: Float) { interactor.updateHaze(value) }
     func display(_ value: EditorDisplayMode) { interactor.setDisplayMode(value) }
     func preview() { interactor.toggleCleanPreview() }
     func done() {

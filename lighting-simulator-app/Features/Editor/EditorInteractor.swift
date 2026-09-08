@@ -20,6 +20,7 @@ protocol EditorInteractorProtocol: AnyObject {
     func updateDiffuse(_ value: Float)
     func updateSpecular(_ value: Float)
     func updateShininess(_ value: Float)
+    func updateHaze(_ value: Float)
     func setDisplayMode(_ value: EditorDisplayMode)
     func toggleCleanPreview()
     func flushEdits() async
@@ -182,6 +183,10 @@ final class EditorInteractor: EditorInteractorProtocol {
         mutate { $0.parameters.specularShininess = value }
         schedulePersistence()
     }
+    func updateHaze(_ value: Float) {
+        mutate { $0.parameters.hazeIntensity = value }
+        schedulePersistence()
+    }
     func setDisplayMode(_ value: EditorDisplayMode) { mutate { $0.displayMode = value } }
     func toggleCleanPreview() { mutate { $0.isCleanPreview.toggle() } }
 
@@ -226,6 +231,7 @@ final class EditorInteractor: EditorInteractorProtocol {
             mapped.diffuseStrength = entity.parameters.diffuseStrength
             mapped.specularStrength = entity.parameters.specularStrength
             mapped.specularShininess = entity.parameters.specularShininess
+            mapped.hazeIntensity = entity.parameters.hazeIntensity
             for renderIndex in mapped.lights.indices {
                 if let previous = previousFalloffs[mapped.lights[renderIndex].id] {
                     mapped.lights[renderIndex].falloffSoftness = previous
