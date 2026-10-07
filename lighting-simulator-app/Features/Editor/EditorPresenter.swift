@@ -24,8 +24,13 @@ final class EditorPresenter: ObservableObject {
             tiltDelta: Float(translation.height) * 0.035
         )
     }
+    func move(_ direction: LightPlanarMoveDirection) {
+        interactor.moveSelectedLight(direction)
+    }
     func height(_ value: Float) { interactor.updateHeight(value) }
     func intensity(_ value: Float) { interactor.updateIntensity(value) }
+    func lightType(_ value: COBLightType) { interactor.updateLightType(value) }
+    func rgbColor(_ value: LightRGBColor) { interactor.updateRGBColor(value) }
     func kelvin(_ value: Float) { interactor.updateKelvin(value) }
     func beam(_ value: Float) { interactor.updateBeamAngle(value) }
     func falloff(_ value: Float) { interactor.updateFalloff(value) }
@@ -44,8 +49,14 @@ final class EditorPresenter: ObservableObject {
     }
     func export() {
         Task {
-            do { try await interactor.export(); message = "Hasil tersimpan ke Photos." }
+            do { try await interactor.export(); message = "Export saved to Photos." }
             catch { message = error.localizedDescription }
+        }
+    }
+    func recordVideo() {
+        Task {
+            await interactor.flushEdits()
+            router.showVideoCapture(shotID: interactor.editingShotID)
         }
     }
 }

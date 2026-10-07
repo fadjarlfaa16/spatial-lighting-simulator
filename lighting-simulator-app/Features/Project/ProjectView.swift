@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProjectView: View {
     @StateObject private var presenter: ProjectPresenter
+    @State private var isChoosingProjectKind = false
 
     init(presenter: ProjectPresenter) {
         _presenter = StateObject(wrappedValue: presenter)
@@ -16,7 +17,7 @@ struct ProjectView: View {
                     Text("Projects")
                         .font(.system(size: 38, weight: .bold, design: .rounded))
                     Spacer()
-                    Button(action: presenter.createProject) {
+                    Button(action: { isChoosingProjectKind = true }) {
                         Label("Create New Project", systemImage: "plus")
                     }
                     .buttonStyle(StudioPrimaryButtonStyle())
@@ -41,6 +42,13 @@ struct ProjectView: View {
         }
         .foregroundStyle(AppTheme.textPrimary)
         .toolbar(.hidden, for: .navigationBar)
+        .confirmationDialog("Create New Project", isPresented: $isChoosingProjectKind) {
+            Button("Photo Project") { presenter.createProject(mediaKind: .photo) }
+            Button("Video Project") { presenter.createProject(mediaKind: .video) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Video projects begin with a still lighting reference, then record a relit 720p video.")
+        }
         .alert("Open Project", isPresented: errorIsPresented) {
             Button("OK", role: .cancel) { presenter.errorMessage = nil }
         } message: {
@@ -82,7 +90,14 @@ struct ProjectView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(project.name)
+                    HStack(spacing: 6) {
+                        Text(project.name)
+                        if project.mediaKind == .video {
+                            Image(systemName: "video.fill")
+                                .font(.caption)
+                                .foregroundStyle(AppTheme.primaryBright)
+                        }
+                    }
                         .font(.headline)
                     Text("Last modified \(project.updatedAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption)

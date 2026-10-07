@@ -5,7 +5,7 @@ import Foundation
 @MainActor
 protocol ProjectInteractorProtocol: AnyObject {
     var projectsPublisher: AnyPublisher<[LightingProject], Never> { get }
-    func beginProject()
+    func beginProject(mediaKind: ProjectMediaKind)
     func openProject(id: UUID) async throws -> UUID
     func thumbnail(projectID: UUID) async -> CGImage?
 }
@@ -20,7 +20,7 @@ final class ProjectInteractor: ProjectInteractorProtocol {
         store.$projects.eraseToAnyPublisher()
     }
 
-    func beginProject() { store.beginDraftProject() }
+    func beginProject(mediaKind: ProjectMediaKind) { store.beginDraftProject(mediaKind: mediaKind) }
 
     func openProject(id: UUID) async throws -> UUID {
         try await store.prepareEditor(projectID: id)

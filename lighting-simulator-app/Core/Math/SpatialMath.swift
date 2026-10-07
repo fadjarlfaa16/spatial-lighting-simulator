@@ -3,6 +3,8 @@ import simd
 
 nonisolated enum SpatialMath {
   static let defaultSubjectAimHeight: Float = 1.0
+  static let editorLightMoveStep: Float = 0.1
+  static let editorLightMaximumFloorDistance: Float = 7
 
   static func direction(from origin: SIMD3<Float>, to target: SIMD3<Float>) -> SIMD3<Float>? {
     let delta = target - origin
@@ -17,6 +19,53 @@ nonisolated enum SpatialMath {
 
   static func horizontalDistance(_ first: SIMD3<Float>, _ second: SIMD3<Float>) -> Float {
     simd_distance(SIMD2(first.x, first.z), SIMD2(second.x, second.z))
+  }
+
+  /// Moves a fixture head on X/Z without reviving AR. The capture camera defines
+  /// a stable, user-facing D-pad basis, while a circular subject-relative limit
+  /// prevents an unbounded virtual position. Y is deliberately preserved.
+  static func movedLightPosition(
+    _ lightPosition: SIMD3<Float>,
+    relativeTo subjectPosition: SIMD3<Float>,
+    cameraTransform: simd_float4x4,
+    direction: LightPlanarMoveDirection,
+    step: Float = editorLightMoveStep,
+    maximumDistance: Float = editorLightMaximumFloorDistance
+  ) -> SIMD3<Float> {
+    let camera = cameraTransform.translation
+    let opticalForward = SIMD2(
+      -cameraTransform.columns.2.x,
+      -cameraTransform.columns.2.z
+    )
+    let cameraToSubject = SIMD2(
+      subjectPosition.x - camera.x,
+      subjectPosition.z - camera.z
+    )
+    let forward = planarUnit(
+      opticalForward,
+      fallback: planarUnit(cameraToSubject, fallback: SIMD2(0, -1))
+    )
+    let right = SIMD2(-forward.y, forward.x)
+    let unitOffset = switch direction {
+    case .forward: forward
+    case .backward: -forward
+    case .left: -right
+    case .right: right
+    }
+
+    let distanceStep = max(step.isFinite ? step : editorLightMoveStep, 0)
+    var floor = SIMD2(lightPosition.x, lightPosition.z) + unitOffset * distanceStep
+    let subjectFloor = SIMD2(subjectPosition.x, subjectPosition.z)
+    let relative = floor - subjectFloor
+    let radius = simd_length(relative)
+    let limit = max(
+      maximumDistance.isFinite ? maximumDistance : editorLightMaximumFloorDistance,
+      0
+    )
+    if radius > limit, radius > .ulpOfOne {
+      floor = subjectFloor + relative * (limit / radius)
+    }
+    return SIMD3(floor.x, lightPosition.y, floor.y)
   }
 
   /// Uses the optical axis at shutter time to choose a sensible vertical target
@@ -63,9 +112,13 @@ nonisolated enum SpatialMath {
     ))
     return switch orientation {
     case .up: (cameraRight, -cameraUp)
+    case .upMirrored: (-cameraRight, -cameraUp)
     case .down: (-cameraRight, cameraUp)
+    case .downMirrored: (cameraRight, cameraUp)
     case .right: (cameraUp, cameraRight)
+    case .rightMirrored: (-cameraUp, cameraRight)
     case .left: (-cameraUp, -cameraRight)
+    case .leftMirrored: (cameraUp, -cameraRight)
     }
   }
 
@@ -123,6 +176,23 @@ nonisolated enum SpatialMath {
     let peak = max(rgb.x, max(rgb.y, rgb.z))
     guard peak > .ulpOfOne else { return SIMD3(repeating: 1) }
     return SIMD3<Float>(rgb / peak)
+  }
+
+  /// Converts a colour-picker value from display sRGB into the linear working
+  /// space used by the relighting shader.
+  static func sRGBToLinearRGB(_ color: SIMD3<Float>) -> SIMD3<Float> {
+    SIMD3(
+      sRGBToLinear(color.x),
+      sRGBToLinear(color.y),
+      sRGBToLinear(color.z)
+    ).clamped(lower: 0, upper: 1)
+  }
+
+  private static func sRGBToLinear(_ channel: Float) -> Float {
+    let value = min(max(channel, 0), 1)
+    return value <= 0.04045
+      ? value / 12.92
+      : pow((value + 0.055) / 1.055, 2.4)
   }
 
   static func beamRadius(distance: Float, beamAngleDegrees: Float) -> Float {
@@ -248,6 +318,15 @@ nonisolated enum SpatialMath {
     guard edge1 != edge0 else { return value >= edge1 ? 1 : 0 }
     let t = min(max((value - edge0) / (edge1 - edge0), 0), 1)
     return t * t * (3 - 2 * t)
+  }
+
+  private static func planarUnit(
+    _ value: SIMD2<Float>,
+    fallback: SIMD2<Float>
+  ) -> SIMD2<Float> {
+    let length = simd_length(value)
+    guard length.isFinite, length > 0.0001 else { return fallback }
+    return value / length
   }
 
   private static func linearToSRGB(_ value: Float) -> Float {

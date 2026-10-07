@@ -38,11 +38,11 @@ enum ProjectSessionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingProject:
-            "Project tidak ditemukan."
+            "The project could not be found."
         case .missingCapturedPhoto:
-            "Project belum memiliki foto yang dapat diedit."
+            "This project does not contain an editable photo."
         case .projectNameRequired:
-            "Masukkan nama project sebelum melanjutkan."
+            "Enter a project name to continue."
         }
     }
 }
@@ -77,8 +77,9 @@ final class AppSessionStore: ObservableObject {
 
     /// Creates only an in-memory planning draft. It is intentionally absent
     /// from the project list and repository until capture review is confirmed.
-    func beginDraftProject() {
-        let project = LightingProject(name: "")
+    func beginDraftProject(mediaKind: ProjectMediaKind = .photo) {
+        var project = LightingProject(name: "")
+        project.mediaKind = mediaKind
         currentProject = project
         editorPayload = nil
         draftProjectID = project.id
@@ -144,7 +145,9 @@ final class AppSessionStore: ObservableObject {
 
         let imageData = try await repository.imageData(fileName: imageFileName)
         let photo = try await Task.detached(priority: .userInitiated) {
-            try ImageOrientationNormalizer(maximumPixelDimension: 2_048)
+            try ImageOrientationNormalizer(
+                maximumPixelDimension: ImageOrientationNormalizer.editorProxyMaximumPixelDimension
+            )
                 .normalize(data: imageData)
         }.value
         let plan = SpatialPlanSnapshot(
@@ -203,6 +206,47 @@ final class AppSessionStore: ObservableObject {
 
     func shot(id: UUID) -> Shot? {
         currentProject?.shots.first { $0.id == id }
+    }
+
+    func persistVideo(
+        from sourceURL: URL,
+        shotID: UUID,
+        kind: ProjectVideoKind
+    ) async throws -> URL {
+        guard var project = currentProject,
+              let shotIndex = project.shots.firstIndex(where: { $0.id == shotID }) else {
+            throw ProjectSessionError.missingProject
+        }
+        let fileName = try await repository.saveVideo(
+            from: sourceURL,
+            shotID: shotID,
+            kind: kind
+        )
+        switch kind {
+        case .source:
+            project.shots[shotIndex].sourceVideoFileName = fileName
+        case .relit:
+            project.shots[shotIndex].videoFileName = fileName
+        }
+        project.updatedAt = Date()
+        try await repository.save(project)
+        currentProject = project
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[index] = project
+        }
+        return try await repository.videoURL(fileName: fileName)
+    }
+
+    /// Loads the persisted camera master only when an export needs it. The
+    /// realtime editor continues to retain its smaller proxy and low-res ML maps.
+    func masterImageData(for shotID: UUID) async throws -> Data {
+        guard let shot = currentProject?.shots.first(where: { $0.id == shotID }) else {
+            throw ProjectSessionError.missingProject
+        }
+        guard let fileName = shot.imageFileName else {
+            throw ProjectSessionError.missingCapturedPhoto
+        }
+        return try await repository.imageData(fileName: fileName)
     }
 
     func saveAnalysisCache(

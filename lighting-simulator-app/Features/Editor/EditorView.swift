@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct EditorView: View {
     @StateObject private var presenter: EditorPresenter
@@ -9,16 +10,27 @@ struct EditorView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            HStack(spacing: 0) {
-                imageWorkspace
-                    .frame(width: proxy.size.width * 0.665)
-                Divider()
-                inspector
-                    .frame(width: proxy.size.width * 0.335)
+        ZStack {
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    imageWorkspace
+                        .frame(width: proxy.size.width * 0.665)
+                    Divider()
+                    inspector
+                        .frame(width: proxy.size.width * 0.335)
+                }
+            }
+            .disabled(presenter.entity.isExporting)
+            .scaleEffect(presenter.entity.isExporting ? 0.992 : 1)
+            .offset(y: presenter.entity.isExporting ? 4 : 0)
+            .saturation(presenter.entity.isExporting ? 0.86 : 1)
+
+            if presenter.entity.isExporting {
+                exportProgressOverlay
             }
         }
         .background(AppTheme.backgroundBottom)
+        .animation(.easeOut(duration: 0.18), value: presenter.entity.isExporting)
         .navigationBarBackButtonHidden()
         .task { await presenter.start() }
         .alert("Lighting Studio", isPresented: messageIsPresented) {
@@ -47,7 +59,15 @@ struct EditorView: View {
                 }
                 .buttonStyle(StudioIconButtonStyle(tint: AppTheme.primaryBright))
                 .accessibilityLabel("Export")
-                .disabled(presenter.entity.resources == nil)
+                .disabled(presenter.entity.resources == nil || presenter.entity.isExporting)
+                if presenter.entity.mediaKind == .video {
+                    Button(action: presenter.recordVideo) {
+                        Image(systemName: "video.fill")
+                    }
+                    .buttonStyle(StudioIconButtonStyle(tint: AppTheme.placement))
+                    .accessibilityLabel("Record relit video")
+                    .disabled(presenter.entity.resources == nil || presenter.entity.isExporting)
+                }
             }.padding(.horizontal)
 
             ZStack {
@@ -118,15 +138,29 @@ struct EditorView: View {
                     Text("LIGHTING PLAN").font(.caption.bold()).foregroundStyle(.secondary)
                     lightPicker
                     if let light = presenter.entity.selectedWorldLight {
-                        Text("Geser pada foto untuk mengarahkan \(light.name). Posisi lantai tetap terkunci.")
+                        lightTypePicker(light)
+                        Text("Drag on the photo to aim \(light.name). Use the pad to move its floor position.")
                             .font(.caption).foregroundStyle(.secondary)
+                        LightPositionPad(
+                            floorDistance: selectedFloorDistance,
+                            onMove: presenter.move
+                        )
                         editorSlider("Power", value: light.intensity, range: 0...100, unit: "%", presenter.intensity)
                         editorSlider("Height", value: light.height, range: 0.2...5, unit: "m", presenter.height)
                         editorSlider("Beam", value: light.beamAngle, range: 10...120, unit: "°", presenter.beam)
-                        editorSlider("Kelvin", value: light.kelvin, range: 2_700...10_000, unit: "K", presenter.kelvin)
+                        if light.effectiveCOBType == .classic {
+                            editorSlider("Kelvin", value: light.kelvin, range: 2_700...10_000, unit: "K", presenter.kelvin)
+                        } else {
+                            ColorPicker(
+                                "Emitter Color",
+                                selection: rgbColorBinding(light),
+                                supportsOpacity: false
+                            )
+                            .accessibilityHint("Choose the RGB COB emitter color")
+                        }
                         if let render = selectedRenderLight {
                             editorSlider("Feather", value: render.falloffSoftness, range: 0.02...1, unit: "", presenter.falloff)
-                            Text(String(format: "Jarak kepala COB → target %.2f m", render.distanceMeters))
+                            Text(String(format: "COB head → target %.2f m", render.distanceMeters))
                                 .font(.caption.monospacedDigit()).foregroundStyle(.cyan)
                         }
                     }
@@ -143,15 +177,99 @@ struct EditorView: View {
                     if let summary = presenter.entity.inferenceSummary {
                         Text("Normal: \(summary)").font(.caption).foregroundStyle(.secondary)
                     }
+                    if presenter.entity.mediaKind == .video {
+                        Divider()
+                        Button(action: presenter.recordVideo) {
+                            Label("Record 720p Video", systemImage: "video.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(StudioPrimaryButtonStyle())
+                        .disabled(presenter.entity.resources == nil || presenter.entity.isExporting)
+                    }
                 }.padding()
             }
         }.background(AppTheme.surface)
+    }
+
+    private var exportProgressOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.48)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(AppTheme.primaryBright)
+                Text("Exporting full-resolution image…")
+                    .font(.headline)
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("Refining edges with the original photo. Please keep the app open.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 22)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(AppTheme.border))
+            .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Exporting full-resolution image")
+        .transition(.opacity)
+        .zIndex(10)
     }
 
     private var lightPicker: some View {
         Picker("Lamp", selection: lightSelectionBinding) {
             ForEach(presenter.entity.plan?.lights ?? []) { Text($0.name).tag(Optional($0.id)) }
         }.pickerStyle(.segmented)
+    }
+
+    private func lightTypePicker(_ light: VirtualLight) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("COB TYPE")
+                .font(.caption2.bold())
+                .foregroundStyle(AppTheme.textSecondary)
+            Picker("COB Type", selection: Binding(
+                get: { light.effectiveCOBType },
+                set: presenter.lightType
+            )) {
+                ForEach(COBLightType.allCases) { type in
+                    Text(type.title).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func rgbColorBinding(_ light: VirtualLight) -> Binding<Color> {
+        Binding(
+            get: {
+                let color = light.effectiveRGBColor
+                return Color(
+                    red: Double(color.red),
+                    green: Double(color.green),
+                    blue: Double(color.blue)
+                )
+            },
+            set: { value in
+                let uiColor = UIColor(value)
+                var red: CGFloat = 1
+                var green: CGFloat = 1
+                var blue: CGFloat = 1
+                var alpha: CGFloat = 1
+                guard uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+                    return
+                }
+                presenter.rgbColor(LightRGBColor(
+                    red: Float(red),
+                    green: Float(green),
+                    blue: Float(blue)
+                ))
+            }
+        )
     }
 
     private func editorSlider(
@@ -168,12 +286,20 @@ struct EditorView: View {
         if let image {
             Image(decorative: image, scale: 1).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ContentUnavailableView("Belum tersedia", systemImage: "photo")
+            ContentUnavailableView("Not available", systemImage: "photo")
         }
     }
 
     private var selectedRenderLight: RelightLight? {
         presenter.entity.parameters.lights.first { $0.id == presenter.entity.selectedLightID }
+    }
+    private var selectedFloorDistance: Float {
+        guard let plan = presenter.entity.plan,
+              let light = presenter.entity.selectedWorldLight else { return 0 }
+        return SpatialMath.horizontalDistance(
+            light.position.simd,
+            plan.subjectPosition.simd
+        )
     }
     private func spatialSummary(_ plan: SpatialPlanSnapshot) -> String {
         let cameraRange = SpatialMath.horizontalDistance(
@@ -210,9 +336,94 @@ struct EditorView: View {
     }
 }
 
+/// Compact editor-only X/Z control. It deliberately emits discrete intents;
+/// the interactor owns coordinate conversion, limits, rendering, and persistence.
+private struct LightPositionPad: View {
+    let floorDistance: Float
+    let onMove: (LightPlanarMoveDirection) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Move position", systemImage: "move.3d")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("Camera-relative · X/Z plane")
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.textSecondary)
+                Text(String(format: "%.2f m from subject · max %.0f m", floorDistance,
+                            SpatialMath.editorLightMaximumFloorDistance))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(AppTheme.primaryBright)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Grid(horizontalSpacing: 4, verticalSpacing: 4) {
+                GridRow {
+                    padPlaceholder
+                    directionButton("arrow.up", .forward, "Move light forward by 10 centimeters")
+                    padPlaceholder
+                }
+                GridRow {
+                    directionButton("arrow.left", .left, "Move light left by 10 centimeters")
+                    Text("10\ncm")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .frame(width: 34, height: 34)
+                        .background(AppTheme.backgroundBottom.opacity(0.72), in: Circle())
+                    directionButton("arrow.right", .right, "Move light right by 10 centimeters")
+                }
+                GridRow {
+                    padPlaceholder
+                    directionButton("arrow.down", .backward, "Move light backward by 10 centimeters")
+                    padPlaceholder
+                }
+            }
+        }
+        .padding(10)
+        .background(AppTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: 13))
+        .overlay(RoundedRectangle(cornerRadius: 13).stroke(AppTheme.border))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var padPlaceholder: some View {
+        Color.clear.frame(width: 34, height: 34)
+    }
+
+    private func directionButton(
+        _ systemName: String,
+        _ direction: LightPlanarMoveDirection,
+        _ accessibilityLabel: String
+    ) -> some View {
+        Button { onMove(direction) } label: {
+            Image(systemName: systemName)
+                .frame(width: 34, height: 34)
+        }
+        .buttonStyle(LightPositionStepButtonStyle())
+        .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+private struct LightPositionStepButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(AppTheme.placement)
+            .background(
+                AppTheme.placement.opacity(configuration.isPressed ? 0.28 : 0.12),
+                in: RoundedRectangle(cornerRadius: 9)
+            )
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(AppTheme.placement.opacity(0.24)))
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+    }
+}
+
 /// Image-space representation of the selected physical COB fixture. The base
-/// location comes from AR placement; only its head direction moves while the
-/// user drags. The source is clipped to the photo edge when it sits off-camera.
+/// location begins at its AR placement, then follows editor X/Z steps while its
+/// head direction follows image dragging. A source outside the field can be clipped to the photo
+/// edge, but a source physically behind the camera has no valid image-space
+/// origin and is represented by its aim reticle only.
 private struct COBAimOverlay: View {
     let light: RelightLight
 
@@ -223,6 +434,29 @@ private struct COBAimOverlay: View {
                 green: Double(min(max(light.color.y, 0), 1)),
                 blue: Double(min(max(light.color.z, 0), 1))
             )
+            let target = CGPoint(
+                x: CGFloat(light.normalizedPosition.x) * size.width,
+                y: CGFloat(light.normalizedPosition.y) * size.height
+            )
+            let reticleRadius: CGFloat = 8
+            let reticle = CGRect(
+                x: target.x - reticleRadius,
+                y: target.y - reticleRadius,
+                width: reticleRadius * 2,
+                height: reticleRadius * 2
+            )
+
+            // A fixture behind the capture camera cannot be projected into the
+            // photo. Keep aiming interactive, but do not invent a COB icon or a
+            // cone from an arbitrary clamped screen edge.
+            guard light.sourceIsProjectable else {
+                context.stroke(
+                    Path(ellipseIn: reticle),
+                    with: .color(fixtureColor.opacity(0.70)),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])
+                )
+                return
+            }
             let rawSource = CGPoint(
                 x: CGFloat(light.normalizedSourcePosition.x) * size.width,
                 y: CGFloat(light.normalizedSourcePosition.y) * size.height
@@ -230,10 +464,6 @@ private struct COBAimOverlay: View {
             let source = CGPoint(
                 x: min(max(rawSource.x, 24), size.width - 24),
                 y: min(max(rawSource.y, 24), size.height - 24)
-            )
-            let target = CGPoint(
-                x: CGFloat(light.normalizedPosition.x) * size.width,
-                y: CGFloat(light.normalizedPosition.y) * size.height
             )
             let delta = CGVector(dx: target.x - source.x, dy: target.y - source.y)
             let length = max(hypot(delta.dx, delta.dy), 1)
@@ -390,13 +620,6 @@ private struct COBAimOverlay: View {
                 lineWidth: 1
             )
 
-            let reticleRadius: CGFloat = 8
-            let reticle = CGRect(
-                x: target.x - reticleRadius,
-                y: target.y - reticleRadius,
-                width: reticleRadius * 2,
-                height: reticleRadius * 2
-            )
             context.stroke(
                 Path(ellipseIn: reticle),
                 with: .color(fixtureColor.opacity(0.70)),

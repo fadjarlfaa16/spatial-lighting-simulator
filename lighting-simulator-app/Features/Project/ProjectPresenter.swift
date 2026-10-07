@@ -42,8 +42,8 @@ final class ProjectPresenter: ObservableObject {
         }
     }
 
-    func createProject() {
-        interactor.beginProject()
+    func createProject(mediaKind: ProjectMediaKind) {
+        interactor.beginProject(mediaKind: mediaKind)
         router.showSubjectPlacement()
     }
 

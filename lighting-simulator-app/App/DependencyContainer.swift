@@ -15,27 +15,25 @@ final class DependencyContainer: ObservableObject {
   let store: AppSessionStore
   let arSessionService: ARSessionService
   let normalEstimator: any NormalEstimating
-  let photoCompressor: any PhotoCompressing
+  let videoProcessor: any VideoRelightingProcessing
 
   convenience init() {
     self.init(
       repository: JSONProjectRepository(),
       arSessionService: ARSessionService(),
-      normalEstimator: SapiensNormalEstimator(),
-      photoCompressor: PhotoCompressor()
+      normalEstimator: SapiensNormalEstimator()
     )
   }
 
   init(
     repository: ProjectRepositoryProtocol,
     arSessionService: ARSessionService,
-    normalEstimator: any NormalEstimating,
-    photoCompressor: any PhotoCompressing
+    normalEstimator: any NormalEstimating
   ) {
     router = AppRouter()
     store = AppSessionStore(repository: repository)
     self.arSessionService = arSessionService
     self.normalEstimator = normalEstimator
-    self.photoCompressor = photoCompressor
+    videoProcessor = VideoRelightingProcessor(estimator: normalEstimator)
   }
 }

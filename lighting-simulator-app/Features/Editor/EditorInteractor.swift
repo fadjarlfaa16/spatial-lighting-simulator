@@ -8,11 +8,15 @@ import UniformTypeIdentifiers
 @MainActor
 protocol EditorInteractorProtocol: AnyObject {
     var statePublisher: AnyPublisher<EditorEntity, Never> { get }
+    var editingShotID: UUID { get }
     func start() async
     func selectLight(_ id: UUID)
     func adjustAim(panDelta: Float, tiltDelta: Float)
+    func moveSelectedLight(_ direction: LightPlanarMoveDirection)
     func updateHeight(_ value: Float)
     func updateIntensity(_ value: Float)
+    func updateLightType(_ value: COBLightType)
+    func updateRGBColor(_ value: LightRGBColor)
     func updateKelvin(_ value: Float)
     func updateBeamAngle(_ value: Float)
     func updateFalloff(_ value: Float)
@@ -47,6 +51,7 @@ final class EditorInteractor: EditorInteractorProtocol {
             entity.parameters = SpatialToImageLightingMapper.makeParameters(from: payload.plan)
             payload.editState.apply(to: &entity.parameters)
             entity.selectedLightID = payload.plan.lights.first?.id
+            entity.mediaKind = store.currentProject?.effectiveMediaKind ?? .photo
             if let cache = payload.cachedAnalysis {
                 do {
                     let renderer = SapiensResultRenderer()
@@ -71,6 +76,7 @@ final class EditorInteractor: EditorInteractorProtocol {
     }
 
     var statePublisher: AnyPublisher<EditorEntity, Never> { state.eraseToAnyPublisher() }
+    var editingShotID: UUID { shotID }
 
     func start() async {
         guard !started, let photo = state.value.photo else { return }
@@ -100,7 +106,7 @@ final class EditorInteractor: EditorInteractorProtocol {
                 )
                 $0.inferenceSummary = "\(result.computeUnits) · \(Self.seconds(result.inferenceDuration)) s"
                 $0.phase = $0.resources == nil
-                    ? .failed("Texture GPU tidak dapat dibuat.") : .completed
+                    ? .failed("The GPU textures could not be created.") : .completed
             }
         } catch {
             mutate { $0.phase = .failed(error.localizedDescription) }
@@ -136,6 +142,25 @@ final class EditorInteractor: EditorInteractorProtocol {
         schedulePersistence()
     }
 
+    func moveSelectedLight(_ direction: LightPlanarMoveDirection) {
+        mutatePlanLight { light, plan in
+            let movedPosition = SpatialMath.movedLightPosition(
+                light.position.simd,
+                relativeTo: plan.subjectPosition.simd,
+                cameraTransform: plan.cameraTransform.matrix,
+                direction: direction
+            )
+            guard simd_distance(movedPosition, light.position.simd) > 0.0001 else { return }
+            light.position = SpatialVector(movedPosition)
+            if let target = light.targetPosition?.simd,
+               let lightDirection = SpatialMath.direction(from: movedPosition, to: target),
+               let orientation = SpatialMath.orientation(facing: lightDirection) {
+                light.orientation = SpatialQuaternion(orientation)
+            }
+        }
+        schedulePersistence()
+    }
+
     func updateHeight(_ value: Float) {
         mutatePlanLight { light, _ in
             light.setHeight(value)
@@ -149,6 +174,14 @@ final class EditorInteractor: EditorInteractorProtocol {
     }
     func updateIntensity(_ value: Float) {
         mutatePlanLight { light, _ in light.intensity = min(max(value, 0), 100) }
+        schedulePersistence()
+    }
+    func updateLightType(_ value: COBLightType) {
+        mutatePlanLight { light, _ in light.setCOBType(value) }
+        schedulePersistence()
+    }
+    func updateRGBColor(_ value: LightRGBColor) {
+        mutatePlanLight { light, _ in light.setRGBColor(value) }
         schedulePersistence()
     }
     func updateKelvin(_ value: Float) {
@@ -197,18 +230,27 @@ final class EditorInteractor: EditorInteractorProtocol {
     }
 
     func export() async throws {
-        await flushEdits()
-        guard let resources = state.value.resources else {
+        guard !state.value.isExporting,
+              let resources = state.value.resources else {
             throw MetalRelightingError.unavailable
         }
         mutate { $0.isExporting = true }
         defer { mutate { $0.isExporting = false } }
+        await flushEdits()
         let parameters = state.value.parameters
-        let image = try await resources.export(parameters: parameters)
+        let masterData = try await store.masterImageData(for: shotID)
+        let masterImage = try await Task.detached(priority: .userInitiated) {
+            try ImageOrientationNormalizer(
+                maximumPixelDimension: ImageOrientationNormalizer.exportMaximumPixelDimension
+            )
+                .normalize(data: masterData)
+        }.value
+        let exportResources = try resources.replacingOriginalImage(masterImage)
+        let image = try await exportResources.export(parameters: parameters)
         let data = try Self.pngData(image)
         let authorization = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard authorization == .authorized || authorization == .limited else {
-            throw MetalRelightingError.execution("Izin menambahkan foto ditolak.")
+            throw MetalRelightingError.execution("Permission to add photos was denied.")
         }
         try await PHPhotoLibrary.shared().performChanges {
             PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
@@ -225,8 +267,15 @@ final class EditorInteractor: EditorInteractorProtocol {
             )
             let contextPlan = plan
             body(&plan.lights[index], contextPlan)
-            entity.plan = plan
-            var mapped = SpatialToImageLightingMapper.makeParameters(from: plan)
+            let refreshedPlan = SpatialPlanSnapshot(
+                projectID: plan.projectID,
+                cameraTransform: plan.cameraTransform,
+                cameraCalibration: plan.cameraCalibration,
+                subjectPosition: plan.subjectPosition,
+                lights: plan.lights
+            )
+            entity.plan = refreshedPlan
+            var mapped = SpatialToImageLightingMapper.makeParameters(from: refreshedPlan)
             mapped.ambientIntensity = entity.parameters.ambientIntensity
             mapped.diffuseStrength = entity.parameters.diffuseStrength
             mapped.specularStrength = entity.parameters.specularStrength

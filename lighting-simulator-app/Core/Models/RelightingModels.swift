@@ -5,8 +5,20 @@ import simd
 nonisolated struct RelightLight: Sendable, Equatable, Identifiable {
     let id: UUID
     var normalizedSourcePosition: SIMD2<Float> = SIMD2(0.5, 0.5)
+    /// True only when the physical COB head is in front of the captured camera
+    /// plane and therefore has a valid perspective origin in the photograph.
+    /// A fixture behind the camera still lights the subject, but must not emit
+    /// a fake screen-space cone from a clamped editor icon.
+    var sourceIsProjectable: Bool = true
     var normalizedPosition: SIMD2<Float>
     var direction: SIMD3<Float>
+    /// Fixed subject-to-fixture vector in the final displayed camera axes.
+    /// Unlike `direction`, this does not move when the editor aim is dragged.
+    var subjectToLightMeters: SIMD3<Float>? = nil
+    /// Physical width represented by one aspect-corrected image unit on the
+    /// plane passing through the aimed point. This lets the GPU construct a
+    /// point-to-light vector for every pixel instead of assuming a frontal ray.
+    var surfaceMetersPerShortEdge: Float = 1
     var distanceMeters: Float
     var radius: Float
     var falloffSoftness: Float
@@ -36,15 +48,25 @@ nonisolated enum SpatialToImageLightingMapper {
 
         let lights = snapshot.lights.prefix(LightingProject.maximumLightCount).map { light in
             let lightCamera = transform(light.position.simd, by: inverseCamera)
+            let subjectCamera = transform(snapshot.subjectPosition.simd, by: inverseCamera)
+            let sourceIsProjectable = lightCamera.z < -0.05
             let aimedWorld = SpatialMath.aimedPoint(for: light) ?? snapshot.subjectPosition.simd
             let aimedCamera = transform(aimedWorld, by: inverseCamera)
             let surfaceToLight = lightCamera - aimedCamera
             let distance = max(simd_length(surfaceToLight), 0.05)
-            // Sapiens normals are displayed with +Z facing the camera and image Y
-            // pointing down, hence the Y flip but no Z flip here.
+            // Sapiens runs on the orientation-normalized photo. Rotate the AR
+            // camera-space vector into that displayed pixel space as well;
+            // otherwise landscape captures shade from the wrong screen axis.
             let direction = simd_length_squared(surfaceToLight) > 1e-6
-                ? simd_normalize(SIMD3(surfaceToLight.x, -surfaceToLight.y, surfaceToLight.z))
+                ? displayedDirection(
+                    simd_normalize(surfaceToLight),
+                    orientation: snapshot.cameraCalibration?.imageOrientation ?? .up
+                )
                 : SIMD3<Float>(0, 0, 1)
+            let subjectToLight = displayedVector(
+                lightCamera - subjectCamera,
+                orientation: snapshot.cameraCalibration?.imageOrientation ?? .up
+            )
             let projection = project(
                 aimedCamera,
                 calibration: snapshot.cameraCalibration,
@@ -64,20 +86,24 @@ nonisolated enum SpatialToImageLightingMapper {
                 distance: distance,
                 beamAngleDegrees: light.beamAngle
             )
+            let imageRadius = projectedRadius(
+                beamRadius,
+                at: aimedCamera,
+                calibration: snapshot.cameraCalibration,
+                fallbackDistance: distance
+            )
             return RelightLight(
                 id: light.id,
                 normalizedSourcePosition: sourceProjection,
+                sourceIsProjectable: sourceIsProjectable,
                 normalizedPosition: projection,
                 direction: direction,
+                subjectToLightMeters: subjectToLight,
+                surfaceMetersPerShortEdge: beamRadius / max(imageRadius, 0.001),
                 distanceMeters: distance,
-                radius: projectedRadius(
-                    beamRadius,
-                    at: aimedCamera,
-                    calibration: snapshot.cameraCalibration,
-                    fallbackDistance: distance
-                ),
+                radius: imageRadius,
                 falloffSoftness: 0.72,
-                color: SpatialMath.kelvinToLinearRGB(light.kelvin),
+                color: emitterColor(for: light),
                 intensity: light.enabled ? light.intensity / 100 * 2.2 : 0
             )
         }
@@ -91,9 +117,44 @@ nonisolated enum SpatialToImageLightingMapper {
         )
     }
 
+    private static func emitterColor(for light: VirtualLight) -> SIMD3<Float> {
+        switch light.effectiveCOBType {
+        case .classic:
+            SpatialMath.kelvinToLinearRGB(light.kelvin)
+        case .rgb:
+            SpatialMath.sRGBToLinearRGB(light.effectiveRGBColor.simd)
+        }
+    }
+
     private static func transform(_ point: SIMD3<Float>, by matrix: simd_float4x4) -> SIMD3<Float> {
         let output = matrix * SIMD4<Float>(point, 1)
         return SIMD3(output.x, output.y, output.z)
+    }
+
+    /// Camera X/Y use right/up. The normal model uses the final displayed
+    /// image's right/up axes, so rotate vector components exactly like the
+    /// EXIF-normalized pixels while leaving camera-facing Z unchanged.
+    private static func displayedDirection(
+        _ value: SIMD3<Float>,
+        orientation: CapturedImageOrientation
+    ) -> SIMD3<Float> {
+        simd_normalize(displayedVector(value, orientation: orientation))
+    }
+
+    private static func displayedVector(
+        _ value: SIMD3<Float>,
+        orientation: CapturedImageOrientation
+    ) -> SIMD3<Float> {
+        switch orientation {
+        case .up: SIMD3(value.x, value.y, value.z)
+        case .upMirrored: SIMD3(-value.x, value.y, value.z)
+        case .down: SIMD3(-value.x, -value.y, value.z)
+        case .downMirrored: SIMD3(value.x, -value.y, value.z)
+        case .right: SIMD3(value.y, -value.x, value.z)
+        case .rightMirrored: SIMD3(value.y, value.x, value.z)
+        case .left: SIMD3(-value.y, value.x, value.z)
+        case .leftMirrored: SIMD3(-value.y, -value.x, value.z)
+        }
     }
 
     private static func project(

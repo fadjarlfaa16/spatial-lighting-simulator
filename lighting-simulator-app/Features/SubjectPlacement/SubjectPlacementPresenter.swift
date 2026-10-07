@@ -40,11 +40,18 @@ final class SubjectPlacementPresenter: ObservableObject {
         catch { errorMessage = error.localizedDescription }
     }
 
-    func continueToLight() {
+    func toggleCamera() {
+        Task {
+            do { try await arService.toggleCamera() }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func continueToCapture() {
         guard entity.subject != nil else {
             errorMessage = "Place the planned subject before continuing."
             return
         }
-        router.showLightPlacement()
+        router.showCapture()
     }
 }

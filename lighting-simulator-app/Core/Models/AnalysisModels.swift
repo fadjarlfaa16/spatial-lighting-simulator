@@ -48,7 +48,7 @@ nonisolated enum ComputePreference: String, CaseIterable, Identifiable, Sendable
 nonisolated enum AnalysisPhase: Sendable, Equatable {
     case idle
     case capturing
-    case compressing
+    case savingProject
     case masking
     case preprocessing
     case estimatingNormals
@@ -58,14 +58,14 @@ nonisolated enum AnalysisPhase: Sendable, Equatable {
 
     var message: String {
         switch self {
-        case .idle: "Siap"
-        case .capturing: "Mengambil foto kualitas tinggi…"
-        case .compressing: "Mengoptimalkan foto…"
-        case .masking: "Membuat foreground mask…"
-        case .preprocessing: "Menyiapkan input Sapiens Normal…"
-        case .estimatingNormals: "Menganalisis surface normal…"
-        case .preparingGPU: "Menyiapkan editor Metal…"
-        case .completed: "Selesai"
+        case .idle: "Ready"
+        case .capturing: "Capturing a high-resolution photo…"
+        case .savingProject: "Saving the full-resolution master…"
+        case .masking: "Creating the foreground mask…"
+        case .preprocessing: "Preparing the Sapiens Normal input…"
+        case .estimatingNormals: "Estimating surface normals…"
+        case .preparingGPU: "Preparing the Metal editor…"
+        case .completed: "Complete"
         case .failed(let message): message
         }
     }

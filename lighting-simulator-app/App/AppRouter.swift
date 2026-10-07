@@ -10,9 +10,9 @@ import Foundation
 
 enum AppRoute: Hashable {
     case subjectPlacement
-    case lightPlacement
     case captureReview
     case editor(UUID)
+    case videoCapture(UUID)
 }
 
 @MainActor

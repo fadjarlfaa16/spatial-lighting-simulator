@@ -5,10 +5,10 @@ GPU relighting editor. The app is offline and uses VIPER feature boundaries.
 
 ## User flow
 
-1. Create or open a lighting project.
+1. Create a **Photo** or **Video** lighting project, or reopen an existing one.
 2. Place the planned subject with an AR raycast.
-3. Place, move, or remove up to three floor-lamp bases. Placement exposes no
-   photometric controls; new fixtures use a 1.8 m head and initially aim at the subject.
+3. Automatically create Key, Fill, and Rim lights two metres left, right, and
+   behind the subject relative to the placement camera.
 4. Compose and capture one photo, then choose **Cancel / Retake** or **Proceed**.
    The shutter snapshots the AR pose/intrinsics, releases ARKit's video stream,
    and uses `AVCapturePhotoOutput` with `.photo`/`.quality` for the actual still.
@@ -19,6 +19,17 @@ GPU relighting editor. The app is offline and uses VIPER feature boundaries.
 7. The editor caches photo, normal, and mask as Metal textures. Gestures and sliders
    change only uniforms, so the photo is not inferred again.
 
+### Video projects
+
+Video projects use the same still reference and editor as a photo project. Once the
+lighting plan is approved, **Record 720p Video** opens a normal rear-camera recorder
+configured for landscape 1280 × 720 at 30 fps. ARKit is not reopened. When recording
+ends, the app freezes the already approved light positions, aims, colour, height, beam,
+and global settings; it then runs the existing normal-model and Vision foreground-mask
+pipeline for every frame and exports an H.264 `.mov` with the same Metal relighting
+renderer. The original camera recording stays unmodified during capture, so processing
+is explicitly offline and can take longer than the clip duration on some devices.
+
 ## Architecture
 
 - `App`: composition root, navigation, dependency injection, in-memory handoff state.
@@ -27,6 +38,8 @@ GPU relighting editor. The app is offline and uses VIPER feature boundaries.
 - `Core/Math`: the only implementation of distance, aiming, beam, CCT, and photometry math.
 - `Core/ML`: Normal-only staged Core ML inference and Vision mask generation.
 - `Core/Rendering`: cached Metal textures, 60 Hz on-demand preview, export readback.
+- `Core/Video`: isolated 720p/30 fps camera recording and offline AVFoundation frame
+  reader/writer that reuses the photo renderer.
 - `Features/*`: VIPER View, Interactor, Presenter, Entity, and Router files.
 
 The persistent `VirtualLight` is the source of truth in AR world coordinates. The
@@ -92,6 +105,9 @@ the same fixture at close range.
 
 - A single photo plus normals is a 2.5D approximation. It cannot generate cast shadows,
   reveal hidden geometry, or provide per-pixel metric depth.
+- Video relighting is deliberately offline and analyses every 720p frame independently.
+  It keeps the approved lighting plan stable across the clip, but it does not yet apply
+  temporal normal/mask stabilization for fast subject motion.
 - A 2D aim drag moves the target on the captured camera's subject-depth plane;
   it cannot identify a new hidden 3D target without returning to AR.
 - Stored world coordinates are meaningful within the planning/capture session. This

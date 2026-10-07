@@ -28,7 +28,7 @@ final class CaptureReviewPresenter: ObservableObject {
     }
     func retake() { interactor.retake() }
     func requestProceed() {
-        guard entity.phase != .compressing else { return }
+        guard entity.phase != .savingProject else { return }
         isNamingProject = true
     }
 

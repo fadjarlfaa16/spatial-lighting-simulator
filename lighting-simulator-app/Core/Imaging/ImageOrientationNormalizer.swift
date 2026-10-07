@@ -6,7 +6,6 @@
 //
 
 
-
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -17,19 +16,24 @@ nonisolated enum ImageOrientationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .undecodableImage: "File tidak dapat dibaca sebagai gambar."
-        case .renderFailed: "Orientasi gambar tidak dapat dinormalisasi."
+        case .undecodableImage: "The file could not be decoded as an image."
+        case .renderFailed: "The image orientation could not be normalized."
         }
     }
 }
 
 nonisolated struct ImageOrientationNormalizer {
+    static let editorProxyMaximumPixelDimension = 2_048
+    /// Covers current 48 MP iPhone masters (8064 px long edge) while staying
+    /// within the Metal texture limit of supported devices.
+    static let exportMaximumPixelDimension = 8_192
+
     /// The model sees at most 1024 pixels on its long axis. Retaining a 48 MP
     /// camera/library decode during three large Core ML passes only increases
     /// peak memory, so keep a high-quality display/render copy capped at 2048.
     let maximumPixelDimension: Int
 
-    init(maximumPixelDimension: Int = 2_048) {
+    init(maximumPixelDimension: Int = editorProxyMaximumPixelDimension) {
         self.maximumPixelDimension = max(64, maximumPixelDimension)
     }
 

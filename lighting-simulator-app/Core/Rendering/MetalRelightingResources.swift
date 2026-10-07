@@ -8,11 +8,11 @@ enum MetalRelightingError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unavailable: "Metal tidak tersedia pada perangkat ini."
-        case .allocation: "Tidak dapat mengalokasikan texture Metal."
-        case .shaderMissing: "Shader relighting tidak ditemukan dalam app."
-        case .invalidBuffer: "Buffer normal/mask tidak sesuai dimensinya."
-        case .execution(let message): "Render Metal gagal: \(message)"
+        case .unavailable: "Metal is not available on this device."
+        case .allocation: "The app could not allocate a Metal texture."
+        case .shaderMissing: "The relighting shader is missing from the app."
+        case .invalidBuffer: "The normal or mask buffer has invalid dimensions."
+        case .execution(let message): "Metal rendering failed: \(message)"
         }
     }
 }
@@ -30,6 +30,9 @@ final class MetalRelightingResources: @unchecked Sendable {
     let normal: MTLTexture
     let mask: MTLTexture
     let hasMask: Bool
+    /// Normalized centre and size of the meaningful foreground bounds. Computed
+    /// once when the mask is uploaded, then reused by every realtime GPU frame.
+    let maskGeometry: SIMD4<Float>
 
     init(
         originalImage: CGImage,
@@ -56,26 +59,9 @@ final class MetalRelightingResources: @unchecked Sendable {
         descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
 
-        let width = originalImage.width
-        let height = originalImage.height
-        self.width = width
-        self.height = height
-        let photo = try Self.makeTexture(device, width, height, .bgra8Unorm)
-        self.photo = photo
-        var bytes = [UInt8](repeating: 0, count: width * height * 4)
-        try bytes.withUnsafeMutableBytes { storage in
-            guard let context = CGContext(
-                data: storage.baseAddress, width: width, height: height,
-                bitsPerComponent: 8, bytesPerRow: width * 4,
-                space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue
-                    | CGImageAlphaInfo.premultipliedFirst.rawValue
-            ) else { throw MetalRelightingError.allocation }
-            // Same top-row convention as preprocessing and the CPU reference.
-            context.draw(originalImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-            photo.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
-                          withBytes: storage.baseAddress!, bytesPerRow: width * 4)
-        }
+        width = originalImage.width
+        height = originalImage.height
+        photo = try Self.photoTexture(device, image: originalImage)
         normal = try Self.vectorTexture(device, normals.width, normals.height, normals.normals)
         hasMask = mask != nil
         if let mask {
@@ -89,11 +75,13 @@ final class MetalRelightingResources: @unchecked Sendable {
                 texture.replace(region: MTLRegionMake2D(0, 0, mask.width, mask.height),
                                 mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: mask.width)
             }
+            maskGeometry = Self.geometry(for: mask)
         } else {
             self.mask = try Self.makeTexture(device, 1, 1, .r8Unorm)
             var full: UInt8 = 255
             self.mask.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0,
                               withBytes: &full, bytesPerRow: 1)
+            maskGeometry = SIMD4(0.5, 0.5, 1, 1)
         }
     }
 
@@ -109,19 +97,74 @@ final class MetalRelightingResources: @unchecked Sendable {
             texture.replace(region: MTLRegionMake2D(0, 0, coverage.width, coverage.height),
                             mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: coverage.width)
         }
-        return MetalRelightingResources(copying: self, mask: texture)
+        return MetalRelightingResources(
+            copying: self,
+            mask: texture,
+            hasMask: true,
+            maskGeometry: Self.geometry(for: coverage)
+        )
     }
 
-    private init(copying source: MetalRelightingResources, mask: MTLTexture) {
+    /// Creates an export-only resource set with the full-resolution camera
+    /// master. Normal and mask textures remain shared at analysis resolution;
+    /// the export shader reconstructs them with RGB-guided edge awareness.
+    func replacingOriginalImage(_ image: CGImage) throws -> MetalRelightingResources {
+        let texture = try Self.photoTexture(device, image: image)
+        return MetalRelightingResources(
+            copying: self,
+            width: image.width,
+            height: image.height,
+            photo: texture
+        )
+    }
+
+    private init(
+        copying source: MetalRelightingResources,
+        width: Int? = nil,
+        height: Int? = nil,
+        photo: MTLTexture? = nil,
+        mask: MTLTexture? = nil,
+        hasMask: Bool? = nil,
+        maskGeometry: SIMD4<Float>? = nil
+    ) {
         device = source.device
         queue = source.queue
         pipeline = source.pipeline
-        width = source.width
-        height = source.height
-        photo = source.photo
+        self.width = width ?? source.width
+        self.height = height ?? source.height
+        self.photo = photo ?? source.photo
         normal = source.normal
-        hasMask = true
-        self.mask = mask
+        self.hasMask = hasMask ?? source.hasMask
+        self.mask = mask ?? source.mask
+        self.maskGeometry = maskGeometry ?? source.maskGeometry
+    }
+
+    /// Ignores barely-visible Vision noise when measuring the silhouette. The
+    /// texture remains untouched; only the projection pivot/extent use this box.
+    private static func geometry(for mask: ForegroundMaskBuffer) -> SIMD4<Float> {
+        var minimumX = mask.width
+        var minimumY = mask.height
+        var maximumX = -1
+        var maximumY = -1
+        for y in 0..<mask.height {
+            for x in 0..<mask.width where mask.coverage[y * mask.width + x] >= 32 {
+                minimumX = min(minimumX, x)
+                minimumY = min(minimumY, y)
+                maximumX = max(maximumX, x)
+                maximumY = max(maximumY, y)
+            }
+        }
+        guard maximumX >= minimumX, maximumY >= minimumY else {
+            return SIMD4(0.5, 0.5, 1, 1)
+        }
+        let width = Float(mask.width)
+        let height = Float(mask.height)
+        return SIMD4(
+            Float(minimumX + maximumX + 1) / (2 * width),
+            Float(minimumY + maximumY + 1) / (2 * height),
+            Float(maximumX - minimumX + 1) / width,
+            Float(maximumY - minimumY + 1) / height
+        )
     }
 
     private static func makeTexture(
@@ -157,17 +200,48 @@ final class MetalRelightingResources: @unchecked Sendable {
         return texture
     }
 
+    private static func photoTexture(_ device: MTLDevice, image: CGImage) throws -> MTLTexture {
+        let width = image.width
+        let height = image.height
+        let texture = try makeTexture(device, width, height, .bgra8Unorm)
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        try bytes.withUnsafeMutableBytes { storage in
+            guard let context = CGContext(
+                data: storage.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue
+                    | CGImageAlphaInfo.premultipliedFirst.rawValue
+            ) else { throw MetalRelightingError.allocation }
+            // Same top-row convention as preprocessing and the CPU reference.
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0,
+                withBytes: storage.baseAddress!,
+                bytesPerRow: width * 4
+            )
+        }
+        return texture
+    }
+
     /// No texture upload or CPU pixel loop here: only a small uniform snapshot.
     func encode(
         parameters: RelightingParameters,
         pass: MTLRenderPassDescriptor,
-        commandBuffer: MTLCommandBuffer
+        commandBuffer: MTLCommandBuffer,
+        edgeAwareRefinement: Bool = false
     ) throws {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
             throw MetalRelightingError.allocation
         }
-        var uniforms = GPUUniforms(parameters, aspect: Float(width) / Float(height),
-                                   hasMask: hasMask)
+        var uniforms = GPUUniforms(
+            parameters,
+            aspect: Float(width) / Float(height),
+            hasMask: hasMask,
+            maskGeometry: maskGeometry,
+            edgeAwareRefinement: edgeAwareRefinement
+        )
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<GPUUniforms>.stride, index: 0)
         encoder.setFragmentTexture(photo, index: 0)
@@ -181,13 +255,22 @@ final class MetalRelightingResources: @unchecked Sendable {
         try Self.makeTexture(device, width, height, .bgra8Unorm, usage: .renderTarget)
     }
 
-    private func submit(parameters: RelightingParameters, target: MTLTexture) async throws -> Double {
+    private func submit(
+        parameters: RelightingParameters,
+        target: MTLTexture,
+        edgeAwareRefinement: Bool = false
+    ) async throws -> Double {
         guard let command = queue.makeCommandBuffer() else { throw MetalRelightingError.allocation }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
-        try encode(parameters: parameters, pass: pass, commandBuffer: command)
+        try encode(
+            parameters: parameters,
+            pass: pass,
+            commandBuffer: command,
+            edgeAwareRefinement: edgeAwareRefinement
+        )
         return try await withCheckedThrowingContinuation { continuation in
             command.addCompletedHandler { completed in
                 if let error = completed.error {
@@ -203,7 +286,11 @@ final class MetalRelightingResources: @unchecked Sendable {
     /// Only export reads GPU pixels back. Preview uses drawable presentation.
     func export(parameters: RelightingParameters) async throws -> CGImage {
         let target = try renderTarget()
-        _ = try await submit(parameters: parameters, target: target)
+        _ = try await submit(
+            parameters: parameters,
+            target: target,
+            edgeAwareRefinement: true
+        )
         try Task.checkCancellation()
         return try autoreleasepool {
             var bytes = [UInt8](repeating: 0, count: width * height * 4)
@@ -250,6 +337,7 @@ private struct GPULight {
     var colorPower = SIMD4<Float>.zero
     var feather = SIMD4<Float>.zero
     var beam = SIMD4<Float>.zero
+    var fixture = SIMD4<Float>.zero
 
     init(_ light: RelightLight? = nil) {
         guard let light else { return }
@@ -274,7 +362,15 @@ private struct GPULight {
         beam = SIMD4(
             finite(light.normalizedSourcePosition.x, fallback: 0.5, range: -2...3),
             finite(light.normalizedSourcePosition.y, fallback: 0.5, range: -2...3),
-            0,
+            finite(light.surfaceMetersPerShortEdge, fallback: 1, range: 0.01...100),
+            light.sourceIsProjectable ? 1 : 0
+        )
+        let fallbackFixture = light.direction * light.distanceMeters
+        let fixedFixture = light.subjectToLightMeters ?? fallbackFixture
+        fixture = SIMD4(
+            finite(fixedFixture.x, fallback: fallbackFixture.x, range: -100...100),
+            finite(fixedFixture.y, fallback: fallbackFixture.y, range: -100...100),
+            finite(fixedFixture.z, fallback: fallbackFixture.z, range: -100...100),
             0
         )
     }
@@ -283,11 +379,19 @@ private struct GPULight {
 private struct GPUUniforms {
     var material: SIMD4<Float>
     var scene: SIMD4<Float>
+    var maskGeometry: SIMD4<Float>
+    var rendering: SIMD4<Float>
     var light0: GPULight
     var light1: GPULight
     var light2: GPULight
 
-    init(_ p: RelightingParameters, aspect: Float, hasMask: Bool) {
+    init(
+        _ p: RelightingParameters,
+        aspect: Float,
+        hasMask: Bool,
+        maskGeometry: SIMD4<Float>,
+        edgeAwareRefinement: Bool
+    ) {
         material = SIMD4(
             finite(p.ambientIntensity, fallback: 0, range: 0...100),
             finite(p.diffuseStrength, fallback: 0, range: 0...100),
@@ -295,6 +399,8 @@ private struct GPUUniforms {
             finite(p.specularShininess, fallback: 64, range: 1...1024)
         )
         scene = SIMD4(aspect, Float(min(p.lights.count, 3)), hasMask ? 1 : 0, finite(p.hazeIntensity, fallback: 0.15, range: 0...1))
+        self.maskGeometry = maskGeometry
+        rendering = SIMD4(edgeAwareRefinement ? 1 : 0, 0, 0, 0)
         light0 = GPULight(p.lights.first)
         light1 = GPULight(p.lights.count > 1 ? p.lights[1] : nil)
         light2 = GPULight(p.lights.count > 2 ? p.lights[2] : nil)

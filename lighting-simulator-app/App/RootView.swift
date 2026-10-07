@@ -45,17 +45,11 @@ struct RootView: View {
                 interactor: SubjectPlacementInteractor(store: container.store, arService: container.arSessionService),
                 router: SubjectPlacementRouter(appRouter: container.router)
             ))
-        case .lightPlacement:
-            LightPlacementView(presenter: LightPlacementPresenter(
-                interactor: LightPlacementInteractor(store: container.store, arService: container.arSessionService),
-                router: LightPlacementRouter(appRouter: container.router)
-            ))
         case .captureReview:
             CaptureReviewView(presenter: CaptureReviewPresenter(
                 interactor: CaptureReviewInteractor(
                     store: container.store,
-                    arService: container.arSessionService,
-                    compressor: container.photoCompressor
+                    arService: container.arSessionService
                 ),
                 router: CaptureReviewRouter(appRouter: container.router)
             ))
@@ -67,6 +61,16 @@ struct RootView: View {
                     shotID: shotID
                 ),
                 router: EditorRouter(appRouter: container.router)
+            ))
+        case .videoCapture(let shotID):
+            VideoCaptureView(presenter: VideoCapturePresenter(
+                interactor: VideoCaptureInteractor(
+                    store: container.store,
+                    recorder: VideoRecordingService(),
+                    processor: container.videoProcessor,
+                    shotID: shotID
+                ),
+                router: VideoCaptureRouter(appRouter: container.router)
             ))
         }
     }

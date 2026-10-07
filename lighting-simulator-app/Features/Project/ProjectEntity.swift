@@ -6,6 +6,7 @@ struct ProjectRowEntity: Identifiable {
     let name: String
     let updatedAt: Date
     let shotCount: Int
+    let mediaKind: ProjectMediaKind
     var thumbnail: CGImage?
 
     init(project: LightingProject) {
@@ -13,6 +14,7 @@ struct ProjectRowEntity: Identifiable {
         name = project.name
         updatedAt = project.updatedAt
         shotCount = project.shots.count
+        mediaKind = project.effectiveMediaKind
         thumbnail = nil
     }
 }

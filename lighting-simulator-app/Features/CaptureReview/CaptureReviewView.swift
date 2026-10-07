@@ -33,7 +33,7 @@ struct CaptureReviewView: View {
                     in: .whitespacesAndNewlines
                 ).isEmpty)
         } message: {
-            Text("Project baru disimpan setelah foto ini dikonfirmasi.")
+            Text("The project is saved only after this photo is confirmed.")
         }
     }
 
@@ -66,11 +66,11 @@ struct CaptureReviewView: View {
     private var inspector: some View {
         VStack(alignment: .leading, spacing: 14) {
             StudioGuideHeader(
-                step: "Step 3 of 3",
+                step: "Step 2 of 2",
                 title: presenter.entity.draft == nil ? "Compose the shot" : "Review photo",
                 detail: presenter.entity.draft == nil
-                    ? "Susun frame, tahan perangkat tetap stabil, lalu tekan shutter."
-                    : "Pastikan orientasi dan komposisi sudah benar sebelum membuka editor."
+                    ? "Compose the frame, hold the device steady, then press the shutter."
+                    : "Check the orientation and composition before opening the editor."
             )
 
             Divider().overlay(AppTheme.border)
@@ -95,14 +95,14 @@ struct CaptureReviewView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(StudioSecondaryButtonStyle())
-                .disabled(presenter.entity.phase == .compressing)
+                .disabled(presenter.entity.phase == .savingProject)
 
                 Button(action: presenter.requestProceed) {
                     Label("Proceed to Editor", systemImage: "arrow.right")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(StudioPrimaryButtonStyle())
-                .disabled(presenter.entity.phase == .compressing)
+                .disabled(presenter.entity.phase == .savingProject)
             }
         }
         .padding(18)
@@ -110,7 +110,7 @@ struct CaptureReviewView: View {
 
     private var phaseIcon: String {
         switch presenter.entity.phase {
-        case .capturing, .compressing: "hourglass"
+        case .capturing, .savingProject: "hourglass"
         case .failed: "exclamationmark.triangle"
         default: "camera"
         }

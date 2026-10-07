@@ -1,9 +1,9 @@
 @MainActor
-protocol SubjectPlacementRouting: AnyObject { func showLightPlacement() }
+protocol SubjectPlacementRouting: AnyObject { func showCapture() }
 
 @MainActor
 final class SubjectPlacementRouter: SubjectPlacementRouting {
     private let appRouter: AppRouter
     init(appRouter: AppRouter) { self.appRouter = appRouter }
-    func showLightPlacement() { appRouter.show(.lightPlacement) }
+    func showCapture() { appRouter.show(.captureReview) }
 }

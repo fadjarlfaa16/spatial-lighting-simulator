@@ -35,6 +35,7 @@ vendor/bundle/
 # Models remain available locally and are copied into the app by Xcode, but are
 # intentionally excluded from Git/GitHub because the Sapiens assets are very large.
 lighting-simulator-app/Resources/Models/
+lighting-simulator-app/Resources/Models.zip
 *.mlpackage/
 *.mlmodelc/
 *.mlarchive

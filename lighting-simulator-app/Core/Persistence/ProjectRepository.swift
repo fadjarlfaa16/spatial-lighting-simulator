@@ -1,10 +1,21 @@
 import Foundation
 
-protocol ProjectRepositoryProtocol: Sendable {
+nonisolated enum ProjectVideoKind: String, Sendable {
+    case source
+    case relit
+}
+
+nonisolated protocol ProjectRepositoryProtocol: Sendable {
     func loadProjects() async throws -> [LightingProject]
     func save(_ project: LightingProject) async throws
     func saveImageData(_ data: Data, shotID: UUID) async throws -> String
     func imageData(fileName: String) async throws -> Data
+    func saveVideo(
+        from sourceURL: URL,
+        shotID: UUID,
+        kind: ProjectVideoKind
+    ) async throws -> String
+    func videoURL(fileName: String) async throws -> URL
     func saveAnalysisData(
         _ data: Data,
         shotID: UUID,
@@ -28,7 +39,9 @@ actor JSONProjectRepository: ProjectRepositoryProtocol {
         self.decoder = JSONDecoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
         decoder.dateDecodingStrategy = .iso8601
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
     }
 
     func loadProjects() async throws -> [LightingProject] {
@@ -56,6 +69,25 @@ actor JSONProjectRepository: ProjectRepositoryProtocol {
 
     func imageData(fileName: String) async throws -> Data {
         try Data(contentsOf: directory.appendingPathComponent(fileName))
+    }
+
+    func saveVideo(
+        from sourceURL: URL,
+        shotID: UUID,
+        kind: ProjectVideoKind
+    ) async throws -> String {
+        try ensureDirectory()
+        let name = "shot-\(shotID.uuidString)-\(kind.rawValue).mov"
+        let destination = directory.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destination)
+        return name
+    }
+
+    func videoURL(fileName: String) async throws -> URL {
+        directory.appendingPathComponent(fileName)
     }
 
     func saveAnalysisData(

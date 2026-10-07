@@ -43,15 +43,15 @@ struct SubjectPlacementView: View {
     private var guide: some View {
         VStack(alignment: .leading, spacing: 14) {
             StudioGuideHeader(
-                step: "Step 1 of 3",
+                step: "Step 1 of 2",
                 title: "Place the subject",
-                detail: "Arahkan reticle ke lantai tempat subjek akan berdiri, lalu simpan posisinya."
+                detail: "Aim the reticle at the floor where the subject will stand, then save the position."
             )
 
             Divider().overlay(AppTheme.border)
 
             Label(
-                presenter.entity.subject == nil ? "Belum ditempatkan" : "Posisi subjek tersimpan",
+                presenter.entity.subject == nil ? "Not placed" : "Subject position saved",
                 systemImage: presenter.entity.subject == nil
                     ? "scope" : "checkmark.circle.fill"
             )
@@ -63,17 +63,26 @@ struct SubjectPlacementView: View {
 
             Spacer()
 
-            Button(action: presenter.placeSubject) {
-                Label(
-                    presenter.entity.subject == nil ? "Place Subject" : "Move Subject",
-                    systemImage: "person.crop.circle.badge.plus"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(StudioPrimaryButtonStyle())
+            HStack(spacing: 12) {
+                Button(action: presenter.placeSubject) {
+                    Label(
+                        presenter.entity.subject == nil ? "Place Subject" : "Move Subject",
+                        systemImage: "person.crop.circle.badge.plus"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(StudioPrimaryButtonStyle())
 
-            Button(action: presenter.continueToLight) {
-                Label("Continue to Lamps", systemImage: "arrow.right")
+                Button(action: presenter.toggleCamera) {
+                    Image(systemName: "arrow.triangle.2.circlepath.camera")
+                        .font(.title3)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(StudioSecondaryButtonStyle())
+            }
+
+            Button(action: presenter.continueToCapture) {
+                Label("Continue to Camera", systemImage: "arrow.right")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(StudioSecondaryButtonStyle())

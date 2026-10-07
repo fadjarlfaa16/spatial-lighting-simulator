@@ -11,7 +11,11 @@ struct FloorPlanPreview: View {
                 + plan.lights.flatMap { light in
                     [light.position.simd, SpatialMath.aimedPoint(for: light) ?? plan.subjectPosition.simd]
                 }
-            let projection = PlanProjection(points: points, size: proxy.size)
+            let projection = PlanProjection(
+                points: points,
+                anchor: plan.subjectPosition.simd,
+                size: proxy.size
+            )
 
             ZStack {
                 RoundedRectangle(cornerRadius: 14)
@@ -57,6 +61,7 @@ struct FloorPlanPreview: View {
                 RoundedRectangle(cornerRadius: 14)
                     .stroke(.white.opacity(0.10), lineWidth: 1)
             }
+            .animation(.easeOut(duration: 0.12), value: plan.lights)
         }
         .accessibilityLabel("Denah kartesius posisi kamera, subjek, dan lampu")
     }
@@ -141,15 +146,12 @@ private struct PlanProjection {
     private let scale: CGFloat
     private let drawingCenter: CGPoint
 
-    init(points: [SIMD3<Float>], size: CGSize) {
-        let xs = points.map(\.x)
-        let zs = points.map(\.z)
-        let rawMinX = xs.min() ?? -1
-        let rawMaxX = xs.max() ?? 1
-        let rawMinZ = zs.min() ?? -1
-        let rawMaxZ = zs.max() ?? 1
-        center = SIMD2((rawMinX + rawMaxX) * 0.5, (rawMinZ + rawMaxZ) * 0.5)
-        let required = max(rawMaxX - rawMinX, rawMaxZ - rawMinZ) + 0.8
+    init(points: [SIMD3<Float>], anchor: SIMD3<Float>, size: CGSize) {
+        center = SIMD2(anchor.x, anchor.z)
+        let maximumExtent = points.reduce(Float.zero) { current, point in
+            max(current, max(abs(point.x - anchor.x), abs(point.z - anchor.z)))
+        }
+        let required = maximumExtent * 2 + 0.8
         worldSpan = max(ceil(required * 2) / 2, 2)
         minimumX = center.x - worldSpan * 0.5
         maximumX = center.x + worldSpan * 0.5

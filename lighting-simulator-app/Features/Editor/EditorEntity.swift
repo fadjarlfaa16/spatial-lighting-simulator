@@ -22,6 +22,7 @@ struct EditorEntity {
     var isCleanPreview = false
     var isExporting = false
     var inferenceSummary: String?
+    var mediaKind: ProjectMediaKind = .photo
 
     var selectedWorldLight: VirtualLight? {
         plan?.lights.first { $0.id == selectedLightID } ?? plan?.lights.first

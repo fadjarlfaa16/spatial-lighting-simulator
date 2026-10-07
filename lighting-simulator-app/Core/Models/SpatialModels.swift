@@ -20,6 +20,31 @@ nonisolated struct SpatialVector: Codable, Equatable, Sendable {
   static let zero = SpatialVector(.zero)
 }
 
+/// A discrete editor-space translation on the floor plane. Forward/backward
+/// follow the capture camera's ground heading; left/right are perpendicular to it.
+nonisolated enum LightPlanarMoveDirection: Sendable {
+  case forward
+  case backward
+  case left
+  case right
+}
+
+/// The still image is always the lighting reference. Video projects add a
+/// separately captured, relit movie after the reference still is approved.
+nonisolated enum ProjectMediaKind: String, Codable, CaseIterable, Identifiable, Sendable {
+  case photo
+  case video
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .photo: "Photo"
+    case .video: "Video"
+    }
+  }
+}
+
 nonisolated struct SpatialQuaternion: Codable, Equatable, Sendable {
   var x: Float
   var y: Float
@@ -71,33 +96,46 @@ nonisolated struct SpatialTransform: Codable, Equatable, Sendable {
 /// coordinate system after ImageIO consumes the EXIF transform exactly once.
 nonisolated enum CapturedImageOrientation: String, Codable, Equatable, Sendable {
   case up, down, left, right
+  case upMirrored, downMirrored, leftMirrored, rightMirrored
 
   /// EXIF orientation written beside an unrotated camera pixel buffer.
   var exifRawValue: Int {
     switch self {
     case .up: 1
+    case .upMirrored: 2
     case .down: 3
-    case .left: 8
+    case .downMirrored: 4
+    case .leftMirrored: 5
     case .right: 6
+    case .rightMirrored: 7
+    case .left: 8
     }
   }
 
   init(exifRawValue: Int, fallback: CapturedImageOrientation = .up) {
     switch exifRawValue {
-    case 3, 4: self = .down
-    case 5, 8: self = .left
-    case 6, 7: self = .right
-    case 1, 2: self = .up
+    case 1: self = .up
+    case 2: self = .upMirrored
+    case 3: self = .down
+    case 4: self = .downMirrored
+    case 5: self = .leftMirrored
+    case 6: self = .right
+    case 7: self = .rightMirrored
+    case 8: self = .left
     default: self = fallback
     }
   }
 
   func orient(normalized point: SIMD2<Float>) -> SIMD2<Float> {
     switch self {
-    case .up: point
-    case .down: SIMD2(1 - point.x, 1 - point.y)
-    case .left: SIMD2(point.y, 1 - point.x)
-    case .right: SIMD2(1 - point.y, point.x)
+    case .up: return point
+    case .upMirrored: return SIMD2(1 - point.x, point.y)
+    case .down: return SIMD2(1 - point.x, 1 - point.y)
+    case .downMirrored: return SIMD2(point.x, 1 - point.y)
+    case .left: return SIMD2(point.y, 1 - point.x)
+    case .leftMirrored: return SIMD2(point.y, point.x)
+    case .right: return SIMD2(1 - point.y, point.x)
+    case .rightMirrored: return SIMD2(1 - point.y, 1 - point.x)
     }
   }
 }
@@ -156,6 +194,39 @@ nonisolated struct PlannedSubject: Identifiable, Codable, Equatable, Sendable {
   var position: SpatialVector
 }
 
+/// Fixture families share the same measured position, beam and shadow model.
+/// Only their emitter colour source differs in the editor and renderer.
+nonisolated enum COBLightType: String, Codable, CaseIterable, Identifiable, Sendable {
+  case classic
+  case rgb
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .classic: "Classic COB"
+    case .rgb: "RGB COB"
+    }
+  }
+}
+
+/// An sRGB editor colour. The mapper converts it to linear sRGB exactly once
+/// before the value reaches the lighting equation.
+nonisolated struct LightRGBColor: Codable, Equatable, Sendable {
+  var red: Float
+  var green: Float
+  var blue: Float
+
+  init(red: Float, green: Float, blue: Float) {
+    self.red = min(max(red, 0), 1)
+    self.green = min(max(green, 0), 1)
+    self.blue = min(max(blue, 0), 1)
+  }
+
+  var simd: SIMD3<Float> { SIMD3(red, green, blue) }
+  static let white = LightRGBColor(red: 1, green: 1, blue: 1)
+}
+
 nonisolated struct VirtualLight: Identifiable, Codable, Equatable, Sendable {
   var id = UUID()
   var name = "Key Light"
@@ -168,6 +239,9 @@ nonisolated struct VirtualLight: Identifiable, Codable, Equatable, Sendable {
   var height: Float = 1.8
   var intensity: Float = 70
   var kelvin: Float = 5_600
+  /// Optional fields preserve decoding of projects made before RGB COB existed.
+  var cobType: COBLightType? = .classic
+  var selectedRGBColor: LightRGBColor? = .white
   var beamAngle: Float = 45
   var enabled = true
   /// Optional fixture calibration. Nil uses the PoC COB reference output.
@@ -180,6 +254,17 @@ nonisolated struct VirtualLight: Identifiable, Codable, Equatable, Sendable {
   var isTargetLocked: Bool { targetPosition != nil }
   var panOffset: Float { panOffsetDegrees ?? 0 }
   var tiltOffset: Float { tiltOffsetDegrees ?? 0 }
+  var effectiveCOBType: COBLightType { cobType ?? .classic }
+  var effectiveRGBColor: LightRGBColor { selectedRGBColor ?? .white }
+
+  mutating func setCOBType(_ type: COBLightType) {
+    cobType = type
+    if selectedRGBColor == nil { selectedRGBColor = .white }
+  }
+
+  mutating func setRGBColor(_ color: LightRGBColor) {
+    selectedRGBColor = color
+  }
 
   mutating func setHeight(_ newHeight: Float) {
     let clamped = min(max(newHeight, 0.2), 5)
@@ -256,6 +341,10 @@ nonisolated struct Shot: Identifiable, Equatable, Sendable {
   var id = UUID()
   var projectID: UUID
   var imageFileName: String?
+  /// Untouched camera recording used as the input for offline relighting.
+  var sourceVideoFileName: String?
+  /// Relit 720p/30fps movie created from this shot's approved lighting plan.
+  var videoFileName: String?
   var normalCacheFileName: String?
   var maskCacheFileName: String?
   var timestamp: Date
@@ -272,6 +361,8 @@ nonisolated struct Shot: Identifiable, Equatable, Sendable {
     id: UUID = UUID(),
     projectID: UUID,
     imageFileName: String?,
+    sourceVideoFileName: String? = nil,
+    videoFileName: String? = nil,
     normalCacheFileName: String? = nil,
     maskCacheFileName: String? = nil,
     timestamp: Date,
@@ -284,6 +375,8 @@ nonisolated struct Shot: Identifiable, Equatable, Sendable {
     self.id = id
     self.projectID = projectID
     self.imageFileName = imageFileName
+    self.sourceVideoFileName = sourceVideoFileName
+    self.videoFileName = videoFileName
     self.normalCacheFileName = normalCacheFileName
     self.maskCacheFileName = maskCacheFileName
     self.timestamp = timestamp
@@ -297,7 +390,8 @@ nonisolated struct Shot: Identifiable, Equatable, Sendable {
 
 extension Shot: Codable {
   private enum CodingKeys: String, CodingKey {
-    case id, projectID, imageFileName, normalCacheFileName, maskCacheFileName,
+    case id, projectID, imageFileName, sourceVideoFileName, videoFileName,
+         normalCacheFileName, maskCacheFileName,
          timestamp, cameraTransform, cameraCalibration,
          subjectPosition, lights, light, editState
   }
@@ -307,6 +401,8 @@ extension Shot: Codable {
     id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
     projectID = try container.decode(UUID.self, forKey: .projectID)
     imageFileName = try container.decodeIfPresent(String.self, forKey: .imageFileName)
+    sourceVideoFileName = try container.decodeIfPresent(String.self, forKey: .sourceVideoFileName)
+    videoFileName = try container.decodeIfPresent(String.self, forKey: .videoFileName)
     normalCacheFileName = try container.decodeIfPresent(String.self, forKey: .normalCacheFileName)
     maskCacheFileName = try container.decodeIfPresent(String.self, forKey: .maskCacheFileName)
     timestamp = try container.decode(Date.self, forKey: .timestamp)
@@ -331,6 +427,8 @@ extension Shot: Codable {
     try container.encode(id, forKey: .id)
     try container.encode(projectID, forKey: .projectID)
     try container.encodeIfPresent(imageFileName, forKey: .imageFileName)
+    try container.encodeIfPresent(sourceVideoFileName, forKey: .sourceVideoFileName)
+    try container.encodeIfPresent(videoFileName, forKey: .videoFileName)
     try container.encodeIfPresent(normalCacheFileName, forKey: .normalCacheFileName)
     try container.encodeIfPresent(maskCacheFileName, forKey: .maskCacheFileName)
     try container.encode(timestamp, forKey: .timestamp)
@@ -346,12 +444,16 @@ nonisolated struct LightingProject: Identifiable, Codable, Equatable, Sendable {
   static let maximumLightCount = 3
   var id = UUID()
   var name: String
+  /// Optional to preserve decoding of all photo projects made before video mode.
+  var mediaKind: ProjectMediaKind? = .photo
   var createdAt = Date()
   var updatedAt = Date()
   var subject: PlannedSubject?
   var lights: [VirtualLight] = []
   var shots: [Shot] = []
   var roomBoundary: RoomBoundary?
+
+  var effectiveMediaKind: ProjectMediaKind { mediaKind ?? .photo }
 
   var primaryLight: VirtualLight? {
     get { lights.first }

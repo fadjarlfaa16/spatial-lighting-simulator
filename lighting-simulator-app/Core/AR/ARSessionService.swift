@@ -47,6 +47,8 @@ final class ARSessionService: NSObject, ObservableObject, ARSessionServiceProtoc
   @Published private(set) var roomBoundary: RoomBoundary?
   @Published private(set) var interruptionMessage: String?
   @Published private(set) var isRunning = false
+  @Published private(set) var cameraPosition: AVCaptureDevice.Position = .back
+  @Published private(set) var facePosition: SIMD3<Float>?
 
   override init() {
     session = ARSession()
@@ -56,24 +58,36 @@ final class ARSessionService: NSObject, ObservableObject, ARSessionServiceProtoc
   }
 
   func start(resetTracking: Bool = false) async throws {
-    guard capabilities.worldTracking else { throw ARServiceError.worldTrackingUnavailable }
     guard await requestCameraAccess() else { throw ARServiceError.cameraPermissionDenied }
 
-    let configuration = ARWorldTrackingConfiguration()
-    configuration.worldAlignment = .gravity
-    configuration.planeDetection = [.horizontal, .vertical]
-    configuration.environmentTexturing = .none
-    // Deliberately no sceneReconstruction, sceneDepth, or personSegmentationWithDepth.
-    // This flow requires only world tracking and raycasts, so it works without LiDAR.
-    if let qualityFormat = ARWorldTrackingConfiguration
-      .recommendedVideoFormatForHighResolutionFrameCapturing
-      ?? ARWorldTrackingConfiguration.supportedVideoFormats.max(by: {
-      let lhsPixels = $0.imageResolution.width * $0.imageResolution.height
-      let rhsPixels = $1.imageResolution.width * $1.imageResolution.height
-      if lhsPixels == rhsPixels { return $0.framesPerSecond > $1.framesPerSecond }
-      return lhsPixels < rhsPixels
-    }) {
-      configuration.videoFormat = qualityFormat
+    let configuration: ARConfiguration
+    if cameraPosition == .front {
+      guard ARFaceTrackingConfiguration.isSupported else { throw ARServiceError.worldTrackingUnavailable }
+      let faceConfig = ARFaceTrackingConfiguration()
+      if let qualityFormat = ARFaceTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing ?? ARFaceTrackingConfiguration.supportedVideoFormats.max(by: {
+        let lhsPixels = $0.imageResolution.width * $0.imageResolution.height
+        let rhsPixels = $1.imageResolution.width * $1.imageResolution.height
+        if lhsPixels == rhsPixels { return $0.framesPerSecond > $1.framesPerSecond }
+        return lhsPixels < rhsPixels
+      }) {
+        faceConfig.videoFormat = qualityFormat
+      }
+      configuration = faceConfig
+    } else {
+      guard capabilities.worldTracking else { throw ARServiceError.worldTrackingUnavailable }
+      let worldConfig = ARWorldTrackingConfiguration()
+      worldConfig.worldAlignment = .gravity
+      worldConfig.planeDetection = [.horizontal, .vertical]
+      worldConfig.environmentTexturing = .none
+      if let qualityFormat = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing ?? ARWorldTrackingConfiguration.supportedVideoFormats.max(by: {
+        let lhsPixels = $0.imageResolution.width * $0.imageResolution.height
+        let rhsPixels = $1.imageResolution.width * $1.imageResolution.height
+        if lhsPixels == rhsPixels { return $0.framesPerSecond > $1.framesPerSecond }
+        return lhsPixels < rhsPixels
+      }) {
+        worldConfig.videoFormat = qualityFormat
+      }
+      configuration = worldConfig
     }
 
     let options: ARSession.RunOptions =
@@ -137,14 +151,25 @@ final class ARSessionService: NSObject, ObservableObject, ARSessionServiceProtoc
     let interfaceOrientation = UIApplication.shared.connectedScenes
       .compactMap { ($0 as? UIWindowScene)?.effectiveGeometry.interfaceOrientation }
       .first(where: { $0 != .unknown }) ?? .landscapeLeft
-    return switch interfaceOrientation {
-    // The rear-camera sensor buffer is native when the interface is landscape
-    // right. ImageIO consumes this EXIF orientation exactly once downstream.
-    case .landscapeRight: .up
-    case .landscapeLeft: .down
-    case .portraitUpsideDown: .left
-    case .portrait: .right
-    default: .up
+      
+    if cameraPosition == .front {
+      return switch interfaceOrientation {
+      case .landscapeRight: .downMirrored
+      case .landscapeLeft: .upMirrored
+      case .portraitUpsideDown: .rightMirrored
+      case .portrait: .leftMirrored
+      default: .downMirrored
+      }
+    } else {
+      return switch interfaceOrientation {
+      // The rear-camera sensor buffer is native when the interface is landscape
+      // right. ImageIO consumes this EXIF orientation exactly once downstream.
+      case .landscapeRight: .up
+      case .landscapeLeft: .down
+      case .portraitUpsideDown: .left
+      case .portrait: .right
+      default: .up
+      }
     }
   }
 
@@ -182,9 +207,16 @@ final class ARSessionService: NSObject, ObservableObject, ARSessionServiceProtoc
     currentFrame = nil
     cameraTransform = nil
     roomBoundary = nil
+    facePosition = nil
     interruptionMessage = nil
     trackingDescription = "Stopped"
     isRunning = false
+  }
+
+  func toggleCamera() async throws {
+    let newPosition: AVCaptureDevice.Position = cameraPosition == .back ? .front : .back
+    cameraPosition = newPosition
+    try await start(resetTracking: true)
   }
 
   func raycastFromCameraCenter(
@@ -274,11 +306,26 @@ extension ARSessionService: ARSessionDelegate {
   }
 
   nonisolated func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-    Task { @MainActor [weak self] in self?.updateBoundary(using: anchors) }
+    Task { @MainActor [weak self] in 
+      self?.updateBoundary(using: anchors)
+      self?.updateFace(using: anchors)
+    }
   }
 
   nonisolated func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-    Task { @MainActor [weak self] in self?.updateBoundary(using: anchors) }
+    Task { @MainActor [weak self] in 
+      self?.updateBoundary(using: anchors) 
+      self?.updateFace(using: anchors)
+    }
+  }
+
+  private func updateFace(using anchors: [ARAnchor]) {
+    for anchor in anchors {
+      if let face = anchor as? ARFaceAnchor {
+        facePosition = (face.transform * SIMD4(0, 0, 0, 1)).xyz
+        return
+      }
+    }
   }
 
   nonisolated func sessionWasInterrupted(_ session: ARSession) {

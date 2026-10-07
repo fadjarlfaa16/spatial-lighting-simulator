@@ -51,7 +51,26 @@ final class SubjectPlacementInteractor: SubjectPlacementInteractorProtocol {
     }
 
     func placeSubject() throws {
-        let position = try arService.raycastFromCameraCenter(alignment: .horizontal, context: "subject placement")
-        store.updateCurrent { $0.subject = PlannedSubject(position: SpatialVector(position)) }
+        let position: SIMD3<Float>
+        if arService.cameraPosition == .front {
+            guard let face = arService.facePosition else {
+                throw ARServiceError.raycastFailed("No face detected for subject placement.")
+            }
+            position = face
+        } else {
+            position = try arService.raycastFromCameraCenter(alignment: .horizontal, context: "subject placement")
+        }
+        guard let cameraTransform = arService.session.currentFrame?.camera.transform else {
+            throw ARServiceError.noCurrentFrame
+        }
+        let subject = PlannedSubject(position: SpatialVector(position))
+        let lights = InitialLightingPlanFactory.makeLights(
+            subjectBase: position,
+            cameraTransform: cameraTransform
+        )
+        store.updateCurrent {
+            $0.subject = subject
+            $0.lights = lights
+        }
     }
 }
